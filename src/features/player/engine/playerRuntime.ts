@@ -2,7 +2,7 @@ import { usePlayerStore } from "../store/playerStore";
 import { api, mediaUrl, ApiError } from "@/shared/api";
 import { log } from "@/shared/utils/logger";
 import { telemetry } from "@/shared/telemetry";
-import { linerDb } from "@/shared/storage";
+import { linerDb, audioCache } from "@/shared/storage";
 import type { Track } from "@/shared/types";
 import { pitchShifter } from "./pitchShifter";
 
@@ -434,7 +434,7 @@ export class PlayerRuntime {
           response.headers.get("content-type") ||
           "audio/webm";
         const blob = new Blob([arrayBuffer], { type: mimeType });
-        await linerDb.putAudio(track.id, blob, mimeType);
+        await audioCache.saveAudioBlob(track.id, blob, mimeType);
         await linerDb.putTrack(track);
         log(
           "green",
@@ -580,6 +580,10 @@ export class PlayerRuntime {
           `started (cached): ${track.title} in ${audioStartLatencyMs}ms`,
         );
         return;
+      }
+
+      if (store.playbackContext?.startsWith("offline:")) {
+        throw new Error("Downloaded audio is no longer available. Retry the download.");
       }
 
       const session = await api.createPlaybackSession(
@@ -830,7 +834,7 @@ export class PlayerRuntime {
         if (signal?.aborted) return;
         const mimeType = preferredMimeType || res.headers.get("content-type") || "audio/webm";
         const blob = new Blob([arrayBuffer], { type: mimeType });
-        await linerDb.putAudio(track.id, blob, mimeType);
+        await audioCache.saveAudioBlob(track.id, blob, mimeType);
         await linerDb.putTrack(track);
         log("green", "playback", `background cached: ${track.title} (${Math.round(blob.size / 1024)} KB)`);
       })

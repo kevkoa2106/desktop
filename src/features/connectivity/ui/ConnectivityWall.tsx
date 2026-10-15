@@ -7,6 +7,7 @@ import { useConnectivityStore } from "../store/connectivityStore";
 import type { DiagCheck } from "../lib/diagnostics";
 import { DIAG_ENDPOINTS } from "../lib/diagnostics";
 import { buildOfflineDump, copyDump, downloadDump } from "../lib/dump";
+import { useLocation, useNavigate } from "react-router-dom";
 
 const SUPPORT_MAIL = "dev@tryliner.fun";
 
@@ -21,6 +22,8 @@ function StatusDot({ status }: { status: DiagCheck["status"] }) {
 }
 
 export default function ConnectivityWall() {
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
   const { t } = useTranslation();
   const { toast } = useToast();
   const [showChecks, setShowChecks] = useState(false);
@@ -45,7 +48,7 @@ export default function ConnectivityWall() {
     [checks, failures, main],
   );
 
-  if (!visible) return null;
+  if (!visible || pathname === "/downloads") return null;
 
   const okCount = checks.filter((c) => c.status === "ok").length;
   const steps = [
@@ -180,6 +183,9 @@ export default function ConnectivityWall() {
         </div>
 
         <div className="mt-[18px] flex flex-wrap items-center gap-[8px]">
+          <Button variant="outline" onClick={() => { reset(); navigate("/downloads"); }}>
+            {t("downloads.title")}
+          </Button>
           <Button
             variant="primary"
             onClick={() => void retry()}

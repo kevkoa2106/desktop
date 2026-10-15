@@ -1,0 +1,134 @@
+import "fake-indexeddb/auto";
+import { Blob as NodeBlob } from "node:buffer";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Track } from "@/shared/types";
+
+const { createSession } = vi.hoisted(() => ({ createSession: vi.fn() }));
+vi.mock("@/shared/api", () => ({
+  api: { createPlaybackSession: createSession },
+  mediaUrl: (url: string) => url,
+}));
+vi.mock("@/features/lyrics", () => ({
+  shouldCacheLyricsCandidate: () => true,
+  compareLyricsCandidates: () => 0,
+}));
+
+const track = (id: string): Track => ({ id, title: id, artists: "Artist", coverUrl: "", durationMs: 60000, playCount: 0 });
+const blob = () => new NodeBlob(["downloaded audio"], { type: "audio/ogg" }) as unknown as Blob;
+let db: typeof import("@/shared/storage/linerDb").linerDb;
+let cache: typeof import("@/shared/storage/audioCache").audioCache;
+let store: typeof import("./store/downloadStore").useDownloadStore;
+let fetchMock: ReturnType<typeof vi.fn>;
+
+beforeEach(async () => {
+  vi.resetModules();
+  db = (await import("@/shared/storage/linerDb")).linerDb;
+  cache = (await import("@/shared/storage/audioCache")).audioCache;
+  store = (await import("./store/downloadStore")).useDownloadStore;
+  await db.clearAll();
+  createSession.mockReset().mockImplementation(async (id: string) => ({ streamUrl: `https://audio.test/${id}`, mimeType: "audio/ogg" }));
+  fetchMock = vi.fn().mockImplementation(async () => ({ ok: true, blob: async () => blob() }));
+  vi.stubGlobal("fetch", fetchMock);
+});
+
+afterEach(async () => {
+  store.getState().cancel();
+  await db.close();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe("offline playlist downloads", () => {
+  it("persists complete audio and metadata across a fresh storage instance", async () => {
+    await store.getState().save("p1", "Saved playlist", [track("a"), track("b")]);
+    expect(store.getState().playlists[0].downloadedIds).toEqual(["a", "b"]);
+    await db.close();
+    vi.resetModules();
+    const fresh = (await import("@/shared/storage/linerDb")).linerDb;
+    expect((await fresh.getOfflinePlaylists())[0].title).toBe("Saved playlist");
+    expect((await fresh.getAudio("a"))?.blob.size).toBe(blob().size);
+    await fresh.close();
+  });
+
+  it("keeps shared downloads during eviction, cache cleanup and removal of one playlist", async () => {
+    await store.getState().save("p1", "First", [track("a")]);
+    await store.getState().save("p2", "Second", [track("a"), track("b")]);
+    await db.putAudio("temporary", blob(), "audio/ogg");
+    await cache.enforceCacheLimit(1);
+    expect(await db.hasAudio("temporary")).toBe(false);
+    expect(await db.hasAudio("a")).toBe(true);
+    await db.clearTemporaryAudio();
+    await store.getState().remove("p1");
+    expect(await db.hasAudio("a")).toBe(true);
+    await store.getState().remove("p2");
+    expect(await db.hasAudio("a")).toBe(false);
+    expect(await db.hasAudio("b")).toBe(false);
+  });
+
+  it("retains completed files after failure and retries only the missing track", async () => {
+    fetchMock.mockImplementationOnce(async () => ({ ok: true, blob: async () => blob() }))
+      .mockRejectedValueOnce(new Error("Disconnected"));
+    await store.getState().save("p1", "Partial", [track("a"), track("b")]);
+    expect(store.getState().playlists[0].downloadedIds).toEqual(["a"]);
+    expect(store.getState().errors.p1).toBe("network");
+    await store.getState().save("p1", "Partial", [track("a"), track("b")]);
+    expect(createSession.mock.calls.map(([id]) => id)).toEqual(["a", "b", "b"]);
+    expect(store.getState().playlists[0].downloadedIds).toEqual(["a", "b"]);
+  });
+
+  it("cancels an in-flight request without losing completed tracks", async () => {
+    fetchMock.mockImplementationOnce(async () => ({ ok: true, blob: async () => blob() }))
+      .mockImplementationOnce((_url: string, { signal }: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason))));
+    const pending = store.getState().save("p1", "Cancelled", [track("a"), track("b")]);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    store.getState().cancel();
+    await pending;
+    expect(store.getState().activeId).toBeNull();
+    expect(store.getState().errors.p1).toBeUndefined();
+    expect((await db.getOfflinePlaylists())[0].downloadedIds).toEqual(["a"]);
+  });
+
+  it("does not claim success when the audio transaction aborts", async () => {
+    const transaction = IDBDatabase.prototype.transaction;
+    vi.spyOn(IDBDatabase.prototype, "transaction").mockImplementation(function (this: IDBDatabase, ...args: Parameters<IDBDatabase["transaction"]>) {
+      const tx = transaction.apply(this, args);
+      if (args[1] === "readwrite") queueMicrotask(() => tx.abort());
+      return tx;
+    });
+    await expect(db.saveOfflineTrack({ id: "p1", title: "Failed", tracks: [track("a")], downloadedIds: ["a"], savedAt: 0 }, "a", blob(), "audio/ogg")).rejects.toThrow();
+    expect(await db.hasAudio("a")).toBe(false);
+    expect(await db.getOfflinePlaylists()).toEqual([]);
+  });
+
+  it("reports disk errors and never publishes an uncommitted track", async () => {
+    vi.spyOn(db, "saveOfflineTrack").mockRejectedValue(new DOMException("Full", "QuotaExceededError"));
+    await store.getState().save("p1", "No space", [track("a")]);
+    expect(store.getState().errors.p1).toBe("storage");
+    expect(store.getState().playlists[0].downloadedIds).toEqual([]);
+    expect(await db.hasAudio("a")).toBe(false);
+  });
+
+  it("removes stale completion badges when files are missing on startup", async () => {
+    await db.putOfflinePlaylist({ id: "p1", title: "Missing", tracks: [track("a")], downloadedIds: ["a"], savedAt: 0 });
+    await store.getState().load();
+    expect(store.getState().playlists[0].downloadedIds).toEqual([]);
+  });
+
+  it("stores available artwork with the local track metadata", async () => {
+    fetchMock.mockImplementation(async (url: string) => ({
+      ok: true,
+      blob: async () => url.includes("cover.test")
+        ? new Blob(["test image"], { type: "image/png" }) : blob(),
+    }));
+    await store.getState().save("p1", "Artwork", [{ ...track("a"), coverUrl: "https://cover.test/a.png" }]);
+    expect((await db.getOfflinePlaylists())[0].tracks[0].coverUrl).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it("rejects a partial media response instead of marking it downloaded", async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 206, headers: new Headers({ "content-range": "bytes 0-15/200" }), blob: async () => blob() });
+    await store.getState().save("p1", "Partial response", [track("a")]);
+    expect(store.getState().errors.p1).toBe("unavailable");
+    expect(store.getState().playlists[0].downloadedIds).toEqual([]);
+  });
+});
