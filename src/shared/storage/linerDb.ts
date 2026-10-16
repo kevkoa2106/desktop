@@ -68,10 +68,10 @@ class LinerDb {
   private memLyrics = new Map<string, CachedLyricsRecord>();
   private memArtists = new Map<string, CachedArtistRecord>();
 
-  private rememberAudio(record: CachedAudioRecord): void {
+  private rememberAudio(record: CachedAudioRecord, persistenceFailed = false): void {
     // IndexedDB owns durable audio; the fallback must not retain a listening history of Blobs.
-    if (this.isSupported) return;
     this.memAudio.delete(record.trackId);
+    if (this.isSupported && !persistenceFailed) return;
     if (record.byteSize > 32 * 1024 * 1024) return;
     this.memAudio.set(record.trackId, record);
     let bytes = [...this.memAudio.values()].reduce((sum, item) => sum + item.byteSize, 0);
@@ -382,30 +382,28 @@ class LinerDb {
       savedAt: existing?.savedAt ?? now,
       lastPlayedAt: lastPlayedAt ?? now,
     };
-    this.rememberAudio(record);
-
-    await this.runTransaction("audio", "readwrite", (store) => {
-      return new Promise<void>((resolve, reject) => {
+    const persisted = await this.runTransaction("audio", "readwrite", (store) => {
+      return new Promise<boolean>((resolve, reject) => {
         const req = store.put(record);
-        req.onsuccess = () => resolve();
+        store.transaction.oncomplete = () => resolve(true);
         req.onerror = () => reject(req.error);
       });
     });
+    this.rememberAudio(record, !persisted);
   }
 
   async touchAudio(trackId: string): Promise<void> {
     const record = await this.getAudio(trackId);
     if (!record) return;
     record.lastPlayedAt = Date.now();
-    this.rememberAudio(record);
-
-    await this.runTransaction("audio", "readwrite", (store) => {
-      return new Promise<void>((resolve) => {
+    const persisted = await this.runTransaction("audio", "readwrite", (store) => {
+      return new Promise<boolean>((resolve, reject) => {
         const req = store.put(record);
-        req.onsuccess = () => resolve();
-        req.onerror = () => resolve();
+        store.transaction.oncomplete = () => resolve(true);
+        req.onerror = () => reject(req.error);
       });
     });
+    this.rememberAudio(record, !persisted);
   }
 
   async getOldestAudioRecords(): Promise<CachedAudioRecord[]> {

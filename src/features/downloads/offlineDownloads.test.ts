@@ -39,6 +39,21 @@ afterEach(async () => {
 });
 
 describe("offline playlist downloads", () => {
+  it("bounds the session fallback after failed writes and releases it after recovery", async () => {
+    const fail = vi.spyOn(IDBDatabase.prototype, "transaction").mockImplementation(() => {
+      throw new DOMException("Full", "QuotaExceededError");
+    });
+    for (let i = 0; i < 6; i++) await db.putAudio(String(i), blob(), "audio/ogg");
+    expect(await db.getAudio("0")).toBeNull();
+    expect((await db.getAudio("5"))?.blob.size).toBe(blob().size);
+    await db.touchAudio("5");
+    expect((db as unknown as { memAudio: Map<string, unknown> }).memAudio.size).toBe(4);
+    fail.mockRestore();
+    await db.putAudio("5", blob(), "audio/ogg");
+    expect((db as unknown as { memAudio: Map<string, unknown> }).memAudio.has("5")).toBe(false);
+    expect((await db.getAudio("5"))?.blob.size).toBe(blob().size);
+  });
+
   it("persists complete audio and metadata across a fresh storage instance", async () => {
     await store.getState().save("p1", "Saved playlist", [track("a"), track("b")]);
     expect(store.getState().playlists[0].downloadedIds).toEqual(["a", "b"]);
