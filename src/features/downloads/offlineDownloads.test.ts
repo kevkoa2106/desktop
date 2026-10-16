@@ -12,6 +12,7 @@ vi.mock("@/features/lyrics", () => ({
   shouldCacheLyricsCandidate: () => true,
   compareLyricsCandidates: () => 0,
 }));
+vi.mock("@/shared/api/visitorSession", () => ({ getClientVisitorData: async () => "" }));
 
 const track = (id: string): Track => ({ id, title: id, artists: "Artist", coverUrl: "", durationMs: 60000, playCount: 0 });
 const blob = () => new NodeBlob(["downloaded audio"], { type: "audio/ogg" }) as unknown as Blob;
@@ -39,6 +40,25 @@ afterEach(async () => {
 });
 
 describe("offline playlist downloads", () => {
+  it("resolves direct playback plans before downloading audio", async () => {
+    createSession.mockResolvedValue({ transport: "direct_innertube", endpoint: "https://player.test/resolve",
+      method: "POST", headers: {}, body: { context: { client: {} } } });
+    fetchMock.mockImplementationOnce(async () => ({ ok: true, json: async () => ({
+      streamingData: { adaptiveFormats: [{ url: "https://audio.test/direct", mimeType: "audio/webm; codecs=opus" }] },
+    }) }));
+    await store.getState().save("direct", "Direct", [track("a")]);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(["https://player.test/resolve", "https://audio.test/direct"]);
+    expect(store.getState().playlists[0].downloadedIds).toEqual(["a"]);
+    expect((await db.getAudio("a"))?.mimeType).toBe("audio/webm");
+  });
+
+  it("reports unavailable when a playback session has no stream", async () => {
+    createSession.mockResolvedValue({});
+    await store.getState().save("missing", "Missing", [track("a")]);
+    expect(store.getState().errors.missing).toBe("unavailable");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("bounds the session fallback after failed writes and releases it after recovery", async () => {
     const fail = vi.spyOn(IDBDatabase.prototype, "transaction").mockImplementation(() => {
       throw new DOMException("Full", "QuotaExceededError");

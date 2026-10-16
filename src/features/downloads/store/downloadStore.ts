@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { api, mediaUrl } from "@/shared/api";
+import { resolveDirectInnertubeStream } from "@/shared/api/directInnertube";
 import { linerDb, type OfflinePlaylist } from "@/shared/storage/linerDb";
 import type { Track } from "@/shared/types";
 
@@ -97,10 +98,25 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
             failure = "network";
             const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(120_000)]);
             const session = await api.createPlaybackSession(track.id, undefined, signal);
-            const response = await fetch(mediaUrl(session.streamUrl), { signal });
+            let url: string;
+            if (session.transport === "direct_innertube" && session.endpoint && session.headers && session.body) {
+              const direct = await resolveDirectInnertubeStream({
+                endpoint: session.endpoint, method: session.method,
+                headers: session.headers, body: session.body,
+              }, signal);
+              url = direct.url;
+              mimeType = direct.mimeType;
+            } else if (session.streamUrl) {
+              url = mediaUrl(session.streamUrl);
+              mimeType = session.mimeType;
+            } else {
+              failure = "unavailable";
+              throw new Error("No downloadable stream returned");
+            }
+            const response = await fetch(url, { signal });
             if (!response.ok) throw new Error("Download failed");
             blob = await response.blob();
-            mimeType = session.mimeType || blob.type;
+            mimeType = mimeType || blob.type;
             failure = "unavailable";
             if (!blob.size || !mimeType?.startsWith("audio/")) throw new Error("Invalid audio");
             if (response.status === 206) {
