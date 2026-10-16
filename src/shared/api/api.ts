@@ -932,6 +932,7 @@ export const api = {
     id: string,
     preferredCodec?: "opus" | "aac",
     signal?: AbortSignal,
+    transport?: "proxy" | "direct_innertube",
   ): Promise<PlaybackSession> {
     return request<PlaybackSession>(
       `/v1/tracks/${encodeURIComponent(id)}/playback`,
@@ -939,7 +940,7 @@ export const api = {
         method: "POST",
         signal,
         body: JSON.stringify({
-          transport: "proxy",
+          ...(transport ? { transport } : {}),
           ...(preferredCodec ? { preferredCodec } : {}),
         }),
       },
