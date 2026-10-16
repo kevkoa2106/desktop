@@ -24,6 +24,8 @@ export class PlayerRuntime {
   private backgroundCacheAbortController: AbortController | null = null;
   private currentSessionExpiresAt: number | null = null;
   private recoveryAttempts = 0;
+  private hasPlaybackStarted = false;
+  private deviceListenerReady = false;
   public onEnded?: () => void;
   public onError?: (info: { trackId: string; message: string }) => void;
 
@@ -44,7 +46,6 @@ export class PlayerRuntime {
     }
     this.audio = audio;
     this.setupAudioListeners(this.audio);
-    pitchShifter.attach(this.audio);
 
     const initialVolume = usePlayerStore.getState().volume;
     this.audio.volume = initialVolume;
@@ -71,13 +72,13 @@ export class PlayerRuntime {
       }
     });
 
-    this.setupDeviceChangeListener();
     this.setupMediaSession();
     log("green", "boot", "player runtime initialized");
   }
 
   private setupDeviceChangeListener() {
-    if (typeof navigator === "undefined" || !navigator.mediaDevices) return;
+    if (this.deviceListenerReady || typeof navigator === "undefined" || !navigator.mediaDevices) return;
+    this.deviceListenerReady = true;
 
     let initial = true;
     const onDeviceChange = () => {
@@ -93,7 +94,7 @@ export class PlayerRuntime {
 
     try {
       navigator.mediaDevices.addEventListener("devicechange", onDeviceChange);
-      void navigator.mediaDevices.enumerateDevices().then(() => {
+      void navigator.mediaDevices.enumerateDevices().catch(() => {}).then(() => {
         initial = false;
       });
     } catch {
@@ -201,7 +202,7 @@ export class PlayerRuntime {
     audioEl.addEventListener("playing", () => {
       if (this.isResetting || audioEl !== this.audio) return;
       log("green", "audio", "playing");
-      this.applyPlaybackRateAndPitch();
+      this.preparePlayback();
 
       if (this.stallStartTime !== null) {
         const stallDurationMs = Math.round(performance.now() - this.stallStartTime);
@@ -304,12 +305,13 @@ export class PlayerRuntime {
       // Audio element not initialized or properties unsupported
     }
 
+    if (!this.hasPlaybackStarted) return;
+
     try {
       const isPitchLinked = store.isPitchLinked ?? true;
       const pitchSemitones = store.pitchSemitones ?? 0;
       const isReverbEnabled = store.isReverbEnabled ?? false;
       const reverbLevel = store.reverbLevel ?? 0.35;
-      pitchShifter.attach(this.audio);
       pitchShifter.update({
         pitchSemitones,
         isPitchLinked,
@@ -319,6 +321,12 @@ export class PlayerRuntime {
     } catch (err) {
       console.error("[PlayerRuntime] applyPlaybackRateAndPitch error:", err);
     }
+  }
+
+  private preparePlayback(): void {
+    this.hasPlaybackStarted = true;
+    this.setupDeviceChangeListener();
+    this.applyPlaybackRateAndPitch();
   }
 
   private cancelFade(): void {
@@ -533,7 +541,7 @@ export class PlayerRuntime {
         this.audio.src = blobUrl;
         this.audio.volume = 0;
         this.audio.load();
-        this.applyPlaybackRateAndPitch();
+        this.preparePlayback();
 
         const targetPosition =
           this.pendingStartPositionMs > 0
@@ -609,7 +617,7 @@ export class PlayerRuntime {
       this.audio.src = url;
       this.audio.volume = 0;
       this.audio.load();
-      this.applyPlaybackRateAndPitch();
+      this.preparePlayback();
 
       const targetPosition =
         this.pendingStartPositionMs > 0
@@ -744,7 +752,7 @@ export class PlayerRuntime {
     const targetVolume = usePlayerStore.getState().volume;
     usePlayerStore.getState().setStatus("playing");
     pitchShifter.resumeContext();
-    this.applyPlaybackRateAndPitch();
+    this.preparePlayback();
     log("cyan", "audio", "resume requested (fading in)");
 
     const currentTrack = usePlayerStore.getState().currentTrack;
