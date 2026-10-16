@@ -42,6 +42,7 @@ describe("offline playlist downloads", () => {
   it("persists complete audio and metadata across a fresh storage instance", async () => {
     await store.getState().save("p1", "Saved playlist", [track("a"), track("b")]);
     expect(store.getState().playlists[0].downloadedIds).toEqual(["a", "b"]);
+    expect((db as unknown as { memAudio: Map<string, unknown> }).memAudio.size).toBe(0);
     await db.close();
     vi.resetModules();
     const fresh = (await import("@/shared/storage/linerDb")).linerDb;

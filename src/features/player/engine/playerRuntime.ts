@@ -434,14 +434,13 @@ export class PlayerRuntime {
 
         if (!response.ok && response.status !== 206) return;
 
-        const arrayBuffer = await response.arrayBuffer();
+        const blob = await response.blob();
         if (controller.signal.aborted) return;
 
         const mimeType =
           session.mimeType ||
           response.headers.get("content-type") ||
           "audio/webm";
-        const blob = new Blob([arrayBuffer], { type: mimeType });
         await audioCache.saveAudioBlob(track.id, blob, mimeType);
         await linerDb.putTrack(track);
         log(
@@ -838,10 +837,9 @@ export class PlayerRuntime {
     fetch(url, { headers: { Range: "bytes=0-" }, signal })
       .then(async (res) => {
         if (!res.ok && res.status !== 206) return;
-        const arrayBuffer = await res.arrayBuffer();
+        const blob = await res.blob();
         if (signal?.aborted) return;
         const mimeType = preferredMimeType || res.headers.get("content-type") || "audio/webm";
-        const blob = new Blob([arrayBuffer], { type: mimeType });
         await audioCache.saveAudioBlob(track.id, blob, mimeType);
         await linerDb.putTrack(track);
         log("green", "playback", `background cached: ${track.title} (${Math.round(blob.size / 1024)} KB)`);

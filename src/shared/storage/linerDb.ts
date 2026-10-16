@@ -68,6 +68,20 @@ class LinerDb {
   private memLyrics = new Map<string, CachedLyricsRecord>();
   private memArtists = new Map<string, CachedArtistRecord>();
 
+  private rememberAudio(record: CachedAudioRecord): void {
+    // IndexedDB owns durable audio; the fallback must not retain a listening history of Blobs.
+    if (this.isSupported) return;
+    this.memAudio.delete(record.trackId);
+    if (record.byteSize > 32 * 1024 * 1024) return;
+    this.memAudio.set(record.trackId, record);
+    let bytes = [...this.memAudio.values()].reduce((sum, item) => sum + item.byteSize, 0);
+    for (const [id, item] of this.memAudio) {
+      if (this.memAudio.size <= 4 && bytes <= 32 * 1024 * 1024) break;
+      this.memAudio.delete(id);
+      bytes -= item.byteSize;
+    }
+  }
+
   private handleDbError(err: unknown) {
     this.dbPromise = null;
   }
@@ -254,7 +268,7 @@ class LinerDb {
       tx.objectStore("audio").put(record);
       tx.objectStore("downloads").put(playlist);
     });
-    this.memAudio.set(trackId, record);
+    this.rememberAudio(record);
   }
 
   async removeOfflinePlaylist(id: string): Promise<void> {
@@ -352,7 +366,6 @@ class LinerDb {
     });
 
     if (result) {
-      this.memAudio.set(trackId, result);
       return result;
     }
     return this.memAudio.get(trackId) || null;
@@ -369,7 +382,7 @@ class LinerDb {
       savedAt: existing?.savedAt ?? now,
       lastPlayedAt: lastPlayedAt ?? now,
     };
-    this.memAudio.set(trackId, record);
+    this.rememberAudio(record);
 
     await this.runTransaction("audio", "readwrite", (store) => {
       return new Promise<void>((resolve, reject) => {
@@ -384,7 +397,7 @@ class LinerDb {
     const record = await this.getAudio(trackId);
     if (!record) return;
     record.lastPlayedAt = Date.now();
-    this.memAudio.set(trackId, record);
+    this.rememberAudio(record);
 
     await this.runTransaction("audio", "readwrite", (store) => {
       return new Promise<void>((resolve) => {
