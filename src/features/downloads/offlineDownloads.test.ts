@@ -15,7 +15,7 @@ vi.mock("@/features/lyrics", () => ({
 vi.mock("@/shared/api/visitorSession", () => ({ getClientVisitorData: async () => "" }));
 
 const track = (id: string): Track => ({ id, title: id, artists: "Artist", coverUrl: "", durationMs: 60000, playCount: 0 });
-const blob = () => new NodeBlob(["downloaded audio"], { type: "audio/ogg" }) as unknown as Blob;
+const blob = () => new NodeBlob(["OggSdownloaded audio"], { type: "audio/ogg" }) as unknown as Blob;
 let db: typeof import("@/shared/storage/linerDb").linerDb;
 let cache: typeof import("@/shared/storage/audioCache").audioCache;
 let store: typeof import("./store/downloadStore").useDownloadStore;
@@ -40,6 +40,15 @@ afterEach(async () => {
 });
 
 describe("offline playlist downloads", () => {
+  it("rejects media fragments even when the response claims to be audio", async () => {
+    fetchMock.mockResolvedValue({ ok: true, blob: async () =>
+      new NodeBlob([new Uint8Array([0, 0, 0, 24, 115, 116, 121, 112, 0, 0, 0, 0, 0, 0, 0, 0])], { type: "audio/mp4" }) });
+    await store.getState().save("fragment", "Fragment", [track("a")]);
+    expect(store.getState().errors.fragment).toBe("unavailable");
+    expect(store.getState().playlists[0].downloadedIds).toEqual([]);
+    expect(await db.getAudio("a")).toBeNull();
+  });
+
   it("resolves direct playback plans before downloading audio", async () => {
     createSession.mockResolvedValue({ transport: "direct_innertube", endpoint: "https://player.test/resolve",
       method: "POST", headers: {}, body: { context: { client: {} } } });

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { api, mediaUrl } from "@/shared/api";
 import { resolveDirectInnertubeStream } from "@/shared/api/directInnertube";
+import { isStandaloneAudioFile } from "@/shared/storage/audioFormat";
 import { linerDb, type OfflinePlaylist } from "@/shared/storage/linerDb";
 import type { Track } from "@/shared/types";
 
@@ -119,6 +120,9 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
             mimeType = mimeType || blob.type;
             failure = "unavailable";
             if (!blob.size || !mimeType?.startsWith("audio/")) throw new Error("Invalid audio");
+            if (!isStandaloneAudioFile(new Uint8Array(await blob.slice(0, 16).arrayBuffer()))) {
+              throw new Error("Audio requires a standalone file");
+            }
             if (response.status === 206) {
               const range = response.headers.get("content-range")?.match(/^bytes 0-(\d+)\/(\d+)$/);
               if (!range || Number(range[1]) + 1 !== Number(range[2]) || blob.size !== Number(range[2])) {
