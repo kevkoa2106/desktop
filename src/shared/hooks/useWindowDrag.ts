@@ -51,9 +51,11 @@ export function resetWindowDragTimeForTests(): void {
 export const NATIVE_WINDOW_DRAG_CLASS = "native-window-drag";
 const WINDOW_DRAG_STRIP_ID = "window-drag-strip";
 
-// wayland ignores client-side setPosition, so linux hands the drag to the compositor via css app-region
+// Windows and Linux use native app-region dragging; this avoids per-move setPosition on Windows
+// and lets the compositor move the window on Wayland.
 function usesNativeWindowDrag(): boolean {
-  return window.linerElectron?.platform === "linux";
+  const platform = window.linerElectron?.platform;
+  return platform === "linux" || platform === "win32";
 }
 
 // app-region only applies to real boxes, so the top drag strip the js path
@@ -88,7 +90,7 @@ export function useWindowDrag({
   enableDoubleClickMaximize = true,
 }: WindowDragOptions = {}) {
   useEffect(() => {
-    // the compositor handles move and double click maximize natively
+    // the window manager handles move and double click maximize natively
     if (usesNativeWindowDrag()) {
       return enableNativeWindowDrag(topAreaHeight);
     }
@@ -123,7 +125,7 @@ export function useWindowDrag({
           return;
         }
         isDragging = true;
-        // signal main process to lock cursor origin for smooth wayland drag
+        // anchor manual dragging to the system cursor in the main process
         window.linerElectron?.dragStart?.();
       }
 

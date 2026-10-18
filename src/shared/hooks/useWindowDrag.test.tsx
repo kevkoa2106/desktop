@@ -21,8 +21,10 @@ function DragTestComponent(props: { topAreaHeight?: number; dragThreshold?: numb
 describe("useWindowDrag", () => {
   let container: HTMLDivElement;
   let root: Root;
-  let mockDragMove: any;
-  let mockToggleMaximize: any;
+  let mockDragStart: ReturnType<typeof vi.fn>;
+  let mockDragMove: ReturnType<typeof vi.fn>;
+  let mockDragEnd: ReturnType<typeof vi.fn>;
+  let mockToggleMaximize: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     resetWindowDragTimeForTests();
@@ -30,11 +32,16 @@ describe("useWindowDrag", () => {
     document.body.appendChild(container);
     root = createRoot(container);
 
+    mockDragStart = vi.fn();
     mockDragMove = vi.fn();
+    mockDragEnd = vi.fn();
     mockToggleMaximize = vi.fn();
 
     (window as any).linerElectron = {
+      platform: "darwin",
+      dragStart: mockDragStart,
       dragMove: mockDragMove,
+      dragEnd: mockDragEnd,
       toggleMaximize: mockToggleMaximize,
     };
   });
@@ -294,12 +301,12 @@ describe("useWindowDrag", () => {
     expect(mockToggleMaximize).not.toHaveBeenCalled();
   });
 
-  describe("on linux", () => {
+  describe.each(["linux", "win32"] as const)("on %s", (platform) => {
     beforeEach(() => {
-      (window as any).linerElectron.platform = "linux";
+      (window as any).linerElectron.platform = platform;
     });
 
-    it("hands the drag to the compositor instead of moving the window manually", async () => {
+    it("uses native dragging instead of moving the window manually", async () => {
       await act(async () => {
         root.render(<DragTestComponent topAreaHeight={32} dragThreshold={5} />);
       });
@@ -329,11 +336,25 @@ describe("useWindowDrag", () => {
           pointerType: "mouse",
         }),
       );
+      window.dispatchEvent(
+        new PointerEvent("pointerup", {
+          button: 0,
+          clientX: 60,
+          clientY: 15,
+          screenX: 110,
+          screenY: 105,
+          bubbles: true,
+          cancelable: true,
+          pointerType: "mouse",
+        }),
+      );
       emptyArea.dispatchEvent(
         new MouseEvent("dblclick", { button: 0, clientX: 50, clientY: 10, bubbles: true }),
       );
 
+      expect(mockDragStart).not.toHaveBeenCalled();
       expect(mockDragMove).not.toHaveBeenCalled();
+      expect(mockDragEnd).not.toHaveBeenCalled();
       expect(mockToggleMaximize).not.toHaveBeenCalled();
     });
 

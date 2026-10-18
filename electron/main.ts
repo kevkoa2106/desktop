@@ -760,8 +760,8 @@ if (!gotTheLock) {
       }
     });
 
-    // manual window move for windows/macos, anchored on the system cursor.
-    // linux uses css app-region instead (see useWindowDrag): wayland ignores setPosition
+    // manual window move for macOS, anchored on the system cursor.
+    // Windows uses native app-region dragging; Linux needs it because Wayland ignores setPosition.
     let dragStartCursor: { x: number; y: number } | null = null;
     let dragStartWinPos: { x: number; y: number } | null = null;
 

@@ -216,9 +216,9 @@ img {
   user-drag: none;
 }
 
-/* linux window drag (useWindowDrag): the compositor moves the window, so the
-   drag areas are app-region boxes. later no-drag boxes win over earlier drag
-   ones, and pointer-events-none boxes are skipped like the js hit test does. */
+/* Native window drag (useWindowDrag): Windows moves the window through the OS,
+   while Linux hands movement to the compositor. Later no-drag boxes win over
+   earlier drag ones, and pointer-events-none boxes are skipped like the JS hit test. */
 .native-window-drag #window-drag-strip {
   position: fixed;
   top: 0;
