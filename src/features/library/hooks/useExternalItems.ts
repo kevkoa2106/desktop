@@ -22,6 +22,7 @@ type SavedCollectionEntry = {
   playlist?: SavedCollectionSummary;
 };
 
+/** Maps a saved collection entry and optional catalog details to its library row. */
 function toViewModel(
   type: EntityType,
   entry: SavedCollectionEntry,
@@ -62,11 +63,13 @@ function toViewModel(
   };
 }
 
+/** Loads saved collections and retains resolved details while their items stay saved. */
 export function useExternalItems(type: EntityType) {
   const [data, setData] = useState<LibraryItemViewModel[]>([]);
   useEffect(() => {
     let active = true;
     let loadSequence = 0;
+    const hydratedDetails = new Map<string, SavedCollectionSummary>();
     const load = async () => {
       const sequence = ++loadSequence;
       try {
@@ -79,14 +82,27 @@ export function useExternalItems(type: EntityType) {
           return value?.id ? [{ entry, value }] : [];
         });
 
-        setData(entries.map(({ entry, value }) => toViewModel(type, entry, value)));
+        const currentIds = new Set(entries.map(({ value }) => value.id));
+        for (const id of hydratedDetails.keys()) {
+          if (!currentIds.has(id)) hydratedDetails.delete(id);
+        }
+
+        setData(entries.map(({ entry, value }) => {
+          const summaryHasTitleAndCover =
+            (type === "artist" ? value.name : value.title) && value.cover?.url;
+          const details = summaryHasTitleAndCover ? undefined : hydratedDetails.get(value.id);
+          return toViewModel(type, entry, value, details);
+        }));
         void runWorkerPool(entries, 4, async ({ entry, value }, index) => {
           const title = type === "artist" ? value.name : value.title;
+          const cachedDetails = hydratedDetails.get(value.id);
+          const cachedTitle = type === "artist" ? cachedDetails?.name : cachedDetails?.title;
           if (
             !active ||
             sequence !== loadSequence ||
             type === "playlist" ||
-            (title && value.cover?.url)
+            (title && value.cover?.url) ||
+            (cachedTitle && cachedDetails?.cover?.url)
           ) {
             return;
           }
@@ -98,6 +114,7 @@ export function useExternalItems(type: EntityType) {
                 : await api.getArtist(value.id);
             if (!details || !active || sequence !== loadSequence) return;
 
+            hydratedDetails.set(value.id, details);
             const hydratedItem = toViewModel(type, entry, value, details);
             setData((current) => {
               if (!active || sequence !== loadSequence || !current[index]) return current;
@@ -115,12 +132,16 @@ export function useExternalItems(type: EntityType) {
     };
     void load();
     const refresh = () => void load();
+    const refreshAfterAuthChange = () => {
+      hydratedDetails.clear();
+      void load();
+    };
     window.addEventListener("library:changed", refresh);
-    window.addEventListener("auth:changed", refresh);
+    window.addEventListener("auth:changed", refreshAfterAuthChange);
     return () => {
       active = false;
       window.removeEventListener("library:changed", refresh);
-      window.removeEventListener("auth:changed", refresh);
+      window.removeEventListener("auth:changed", refreshAfterAuthChange);
     };
   }, [type]);
   return { data };

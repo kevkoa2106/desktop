@@ -42,6 +42,7 @@ const artistDetails: ApiArtistDetails = {
   singles: [],
 };
 
+/** Renders the hook and exposes its current result to a test. */
 function HookProbe({
   type,
   onChange,
@@ -71,6 +72,7 @@ describe("useExternalItems", () => {
     document.body.removeChild(container);
   });
 
+  /** Mounts the hook for an entity type and lets its initial load settle. */
   async function renderType(type: EntityType) {
     await act(async () => {
       root.render(<HookProbe type={type} onChange={(value) => { result = value; }} />);
@@ -93,6 +95,102 @@ describe("useExternalItems", () => {
       imageUrl: "https://media.example/covers/album.jpg",
       href: "/collection?type=album&id=album%2Fone",
       addedAt: savedAt,
+    });
+  });
+
+  it("preserves hydrated metadata on refresh without repeating a complete lookup", async () => {
+    const pendingRefreshDetails = new Promise<ApiAlbumDetails>(() => {});
+    let detailCalls = 0;
+    const sparseAlbum = { savedAt, album: { id: "album/one" } };
+    vi.mocked(api.listSavedCollections)
+      .mockResolvedValueOnce({ items: [sparseAlbum] })
+      .mockResolvedValueOnce({ items: [sparseAlbum] });
+    vi.mocked(api.getAlbum).mockImplementation(() => {
+      detailCalls += 1;
+      return detailCalls === 1 ? Promise.resolve(albumDetails) : pendingRefreshDetails;
+    });
+
+    await renderType("album");
+    expect(result?.data[0]).toMatchObject({
+      title: "Resolved Album",
+      imageUrl: "https://media.example/covers/album.jpg",
+    });
+
+    await act(async () => {
+      window.dispatchEvent(new Event("library:changed"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(api.getAlbum).toHaveBeenCalledTimes(1);
+    expect(result?.data[0]).toMatchObject({
+      id: "album/one",
+      title: "Resolved Album",
+      imageUrl: "https://media.example/covers/album.jpg",
+      href: "/collection?type=album&id=album%2Fone",
+      addedAt: savedAt,
+    });
+  });
+
+  it("clears hydrated metadata when the authenticated account changes", async () => {
+    const refreshedDetails: ApiAlbumDetails = {
+      ...albumDetails,
+      title: "New Account Album",
+      cover: { url: "/covers/new-account.jpg", width: 640, height: 640 },
+    };
+    const sparseAlbum = { savedAt, album: { id: "album/one" } };
+    vi.mocked(api.listSavedCollections)
+      .mockResolvedValueOnce({ items: [sparseAlbum] })
+      .mockResolvedValueOnce({ items: [sparseAlbum] });
+    vi.mocked(api.getAlbum)
+      .mockResolvedValueOnce(albumDetails)
+      .mockResolvedValueOnce(refreshedDetails);
+
+    await renderType("album");
+    await act(async () => {
+      window.dispatchEvent(new Event("auth:changed"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(api.getAlbum).toHaveBeenCalledTimes(2);
+    expect(result?.data[0]).toMatchObject({
+      id: "album/one",
+      title: "New Account Album",
+      imageUrl: "https://media.example/covers/new-account.jpg",
+    });
+  });
+
+  it("prunes hydrated metadata when a saved item is removed", async () => {
+    const sparseAlbum = { savedAt, album: { id: "album/one" } };
+    const updatedDetails: ApiAlbumDetails = {
+      ...albumDetails,
+      title: "Updated Album",
+      cover: { url: "/covers/updated.jpg", width: 640, height: 640 },
+    };
+    vi.mocked(api.listSavedCollections)
+      .mockResolvedValueOnce({ items: [sparseAlbum] })
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValueOnce({ items: [sparseAlbum] });
+    vi.mocked(api.getAlbum)
+      .mockResolvedValueOnce(albumDetails)
+      .mockResolvedValueOnce(updatedDetails);
+
+    await renderType("album");
+    await act(async () => {
+      window.dispatchEvent(new Event("library:changed"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(result?.data).toEqual([]);
+
+    await act(async () => {
+      window.dispatchEvent(new Event("library:changed"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(api.getAlbum).toHaveBeenCalledTimes(2);
+    expect(result?.data[0]).toMatchObject({
+      id: "album/one",
+      title: "Updated Album",
+      imageUrl: "https://media.example/covers/updated.jpg",
     });
   });
 
