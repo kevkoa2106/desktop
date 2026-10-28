@@ -63,11 +63,11 @@ describe("PlayerRuntime — gapless and crossfade transitions", () => {
     } as any);
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
-    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(
-      function (this: HTMLMediaElement) {
-        setMedia(this as HTMLAudioElement, { paused: true });
-      },
-    );
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(function (
+      this: HTMLMediaElement,
+    ) {
+      setMedia(this as HTMLAudioElement, { paused: true });
+    });
     usePlayerStore.setState({
       status: "playing",
       currentTrack: current,
