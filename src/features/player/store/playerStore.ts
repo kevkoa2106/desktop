@@ -11,6 +11,7 @@ import {
   normalizeEqGains,
   type EqCustomPreset,
 } from "../engine/equalizer";
+import { MAX_CROSSFADE_SECONDS } from "../engine/crossfade";
 
 export { debouncedStorage };
 
@@ -70,6 +71,8 @@ export interface SessionState {
   pitchSemitones: number;
   isPitchLinked: boolean;
   keepSpeedAcrossTracks: boolean;
+  // seconds the next track overlaps the current one, 0 = gapless only
+  crossfadeSeconds: number;
   isReverbEnabled: boolean;
   reverbLevel: number;
   isEqEnabled: boolean;
@@ -127,6 +130,7 @@ export interface PlayerStore extends PlayerState {
   setPitchSemitones: (semitones: number) => void;
   setIsPitchLinked: (linked: boolean) => void;
   setKeepSpeedAcrossTracks: (keep: boolean) => void;
+  setCrossfadeSeconds: (seconds: number) => void;
   setIsReverbEnabled: (enabled: boolean) => void;
   setReverbLevel: (level: number) => void;
   setIsEqEnabled: (enabled: boolean) => void;
@@ -199,6 +203,7 @@ export const usePlayerStore = create<PlayerStore>()(
       pitchSemitones: 0,
       isPitchLinked: true,
       keepSpeedAcrossTracks: true,
+      crossfadeSeconds: 0,
       isReverbEnabled: false,
       reverbLevel: 0.35,
       isEqEnabled: false,
@@ -253,6 +258,13 @@ export const usePlayerStore = create<PlayerStore>()(
       setIsPitchLinked: (isPitchLinked: boolean) => set({ isPitchLinked }),
       setKeepSpeedAcrossTracks: (keepSpeedAcrossTracks: boolean) =>
         set({ keepSpeedAcrossTracks }),
+      setCrossfadeSeconds: (seconds: number) =>
+        set({
+          crossfadeSeconds: Math.max(
+            0,
+            Math.min(MAX_CROSSFADE_SECONDS, Math.round(seconds)),
+          ),
+        }),
       setIsReverbEnabled: (isReverbEnabled: boolean) =>
         set({ isReverbEnabled }),
       setReverbLevel: (reverbLevel: number) =>
@@ -356,6 +368,12 @@ export const usePlayerStore = create<PlayerStore>()(
           if (typeof state.keepSpeedAcrossTracks !== "boolean") {
             state.keepSpeedAcrossTracks = true;
           }
+          if (
+            typeof state.crossfadeSeconds !== "number" ||
+            isNaN(state.crossfadeSeconds)
+          ) {
+            state.crossfadeSeconds = 0;
+          }
           if (typeof state.isReverbEnabled !== "boolean") {
             state.isReverbEnabled = false;
           }
@@ -400,6 +418,7 @@ export const usePlayerStore = create<PlayerStore>()(
         pitchSemitones: state.pitchSemitones,
         isPitchLinked: state.isPitchLinked,
         keepSpeedAcrossTracks: state.keepSpeedAcrossTracks,
+        crossfadeSeconds: state.crossfadeSeconds,
         isReverbEnabled: state.isReverbEnabled,
         reverbLevel: state.reverbLevel,
         isEqEnabled: state.isEqEnabled,
