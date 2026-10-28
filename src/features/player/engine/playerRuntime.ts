@@ -355,10 +355,12 @@ export class PlayerRuntime {
       });
     }
 
-    // a seek, speed change or pause moves the end point: re-armed on the next timeupdate
+    // a seek, speed change or pause moves the end point: re-arm from the new position
     for (const type of ["seeked", "ratechange", "pause"]) {
       audioEl.addEventListener(type, () => {
-        if (audioEl === this.audio) this.clearTransition();
+        if (audioEl !== this.audio) return;
+        this.clearTransition();
+        this.scheduleTransition();
       });
     }
 
