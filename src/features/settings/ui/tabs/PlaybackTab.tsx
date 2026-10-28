@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "@/languages";
 import { usePlayerStore } from "@/features/player";
-import { ToggleSwitch } from "@/shared/ui";
+import { MAX_CROSSFADE_SECONDS } from "@/features/player/engine/crossfade";
+import { Slider, ToggleSwitch } from "@/shared/ui";
 import { SettingRow, SettingSection, SegmentedControl } from "../controls";
 
 export function PlaybackTab({ searchQuery }: { searchQuery?: string }) {
@@ -29,6 +30,10 @@ export function PlaybackTab({ searchQuery }: { searchQuery?: string }) {
   const setPauseOnDeviceChange = usePlayerStore(
     (state) => state.setPauseOnDeviceChange,
   );
+  const crossfadeSeconds = usePlayerStore((state) => state.crossfadeSeconds);
+  const setCrossfadeSeconds = usePlayerStore(
+    (state) => state.setCrossfadeSeconds,
+  );
 
   useEffect(() => {
     setMounted(true);
@@ -46,6 +51,28 @@ export function PlaybackTab({ searchQuery }: { searchQuery?: string }) {
           <ToggleSwitch
             checked={autoplaySimilar}
             onChange={setAutoplaySimilar}
+          />
+        }
+      />
+
+      <SettingRow
+        title={t("settings.crossfade.title")}
+        description={t("settings.crossfade.description")}
+        titleKey="settings.crossfade.title"
+        descKey="settings.crossfade.description"
+        searchQuery={searchQuery}
+        control={
+          <Slider
+            className="w-40"
+            ariaLabel={t("settings.crossfade.title")}
+            value={crossfadeSeconds}
+            onChange={setCrossfadeSeconds}
+            min={0}
+            max={MAX_CROSSFADE_SECONDS}
+            step={1}
+            formatValue={(seconds) =>
+              seconds === 0 ? t("settings.crossfade.off") : `${seconds}s`
+            }
           />
         }
       />
