@@ -1,9 +1,15 @@
 import type { Track } from "@/shared/types";
 
 export const MAX_CROSSFADE_SECONDS = 12;
+export const SKIP_FADE_MS = 300;
+export const GAPLESS_HEAD_START_MS = 40;
+export const TRANSITION_ARM_WINDOW_MS = 1000;
 
-// how long the current and next track overlap on an automatic transition, 0 = gapless.
-// consecutive tracks of one album never fade, so albums and live sets stay seamless.
+export function clampCrossfadeSeconds(seconds: unknown): number {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds)) return 0;
+  return Math.max(0, Math.min(MAX_CROSSFADE_SECONDS, Math.round(seconds)));
+}
+
 export function transitionMs(
   current: Track | null,
   next: Track,
@@ -17,4 +23,15 @@ export function transitionMs(
     half(current?.durationMs),
     half(next.durationMs),
   );
+}
+
+export function transitionTiming(
+  remainingMs: number,
+  wantedFadeMs: number,
+): { fadeMs: number; startInMs: number } {
+  const fadeMs = Math.max(0, Math.min(wantedFadeMs, remainingMs));
+  return {
+    fadeMs,
+    startInMs: remainingMs - (fadeMs || GAPLESS_HEAD_START_MS),
+  };
 }

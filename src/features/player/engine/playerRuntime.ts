@@ -11,8 +11,24 @@ import { isSavedTrack } from "@/shared/media/saved";
 import { pitchShifter } from "./pitchShifter";
 import { FLAT_EQ, isEqActive } from "./equalizer";
 import { resolvePlaybackStream, type PlaybackStream } from "./streamResolver";
-import { transitionMs } from "./crossfade";
-import { logNowPlaying, rememberStreamOrigin } from "./nowPlayingLog";
+import {
+  GAPLESS_HEAD_START_MS,
+  SKIP_FADE_MS,
+  TRANSITION_ARM_WINDOW_MS,
+  transitionMs,
+  transitionTiming,
+} from "./crossfade";
+import {
+  findOrCreateAudioElements,
+  markActiveAudio,
+  rampVolume,
+} from "./audioElements";
+import {
+  releaseStandbySource,
+  resolveStandbySource,
+  type StandbySource,
+} from "./standbySource";
+import { logNowPlaying } from "./nowPlayingLog";
 import {
   downloadAudioBytes,
   isBotCheckError,
@@ -25,61 +41,16 @@ import {
 // error recovery tuning (see the audio "error" handler)
 const RECOVERY_HOLD_MS = 3000;
 const WAITING_GRACE_MS = 300; // a buffering hiccup shorter than this never shows // must play this far past a recovery before it may retry again
-const SKIP_FADE_MS = 300; // a manual skip fades the old track out instead of cutting it
-// ponytail: html audio can't splice sample-accurately, so a gapless start leads by this much
-// to hide play() latency while the old tail fades over it. Tune if a gap or a click shows up.
-const GAPLESS_HEAD_START_MS = 40;
-
-function createAudioElement(id: string): HTMLAudioElement {
-  const audio = new Audio();
-  audio.id = id;
-  audio.crossOrigin = "anonymous";
-  audio.preload = "auto";
-  if (typeof document !== "undefined") document.body.appendChild(audio);
-  return audio;
-}
-
-// eased volume ramp on one element, returns a cancel
-function rampVolume(
-  audio: HTMLAudioElement,
-  targetVolume: number,
-  durationMs: number,
-  onComplete?: () => void,
-): () => void {
-  const clamp = (v: number) => Math.max(0, Math.min(1, v));
-  const startVolume = audio.volume;
-  const diff = targetVolume - startVolume;
-  if (Math.abs(diff) < 0.001 || durationMs <= 0) {
-    audio.volume = clamp(targetVolume);
-    onComplete?.();
-    return () => {};
-  }
-  const startTime = performance.now();
-  const tick = () => {
-    const progress = Math.min((performance.now() - startTime) / durationMs, 1);
-    const eased = 0.5 - 0.5 * Math.cos(progress * Math.PI);
-    audio.volume = clamp(startVolume + diff * eased);
-    // audio fade ticks independently of display vsync in background
-    if (progress < 1) timer = setTimeout(tick, 16);
-    else onComplete?.();
-  };
-  let timer = setTimeout(tick, 16);
-  return () => clearTimeout(timer);
-}
 
 export class PlayerRuntime {
   private audio: HTMLAudioElement;
-  // second element: holds the next track ready to start, and takes over on a transition
   private standby: HTMLAudioElement;
-  private standbyTrackId: string | null = null;
-  private standbyBlobUrl: string | null = null;
-  private standbyRelease: (() => void) | null = null;
+  private standbySlot: { trackId: string; source: StandbySource } | null = null;
   private standbyEpoch = 0;
+  private preloadTicket = 0;
   private pendingStandby: Track | null = null;
   private transitionTimer: ReturnType<typeof setTimeout> | null = null;
-  // a transition already started this track; the engine's loadAndPlay for it is a no-op
   private handoffTrackId: string | null = null;
-  // ends the previous track's fade-out right away (pause, stop, another skip)
   private finishOutgoing: (() => void) | null = null;
   private currentTrackId: string | null = null;
   private loadEpoch = 0;
@@ -114,24 +85,11 @@ export class PlayerRuntime {
   private waitingTimer: ReturnType<typeof setTimeout> | null = null;
   public onEnded?: () => void;
   public onError?: (info: { trackId: string; message: string }) => void;
-  // the track an automatic advance would play next (set by the engine)
   public peekAutoNext?: () => Track | null;
 
   constructor() {
-    const win = typeof window !== "undefined" ? (window as any) : null;
-    const find = (id: string) =>
-      typeof document !== "undefined" ? document.getElementById(id) : null;
-    const audio = (win?.__liner_audio ||
-      find("liner-audio") ||
-      createAudioElement("liner-audio")) as HTMLAudioElement;
-    const standby = (win?.__liner_audio_standby ||
-      find("liner-audio-standby") ||
-      createAudioElement("liner-audio-standby")) as HTMLAudioElement;
-    if (win) {
-      win.__liner_audio = audio;
-      win.__liner_audio_standby = standby;
-    }
-    this.audio = audio;
+    const { active, standby } = findOrCreateAudioElements();
+    this.audio = active;
     this.standby = standby;
     this.setupAudioListeners(this.audio);
     this.setupAudioListeners(this.standby);
@@ -357,7 +315,6 @@ export class PlayerRuntime {
       });
     }
 
-    // a seek, speed change or pause moves the end point: re-arm from the new position
     for (const type of ["seeked", "ratechange", "pause"]) {
       audioEl.addEventListener(type, () => {
         if (audioEl !== this.audio) return;
@@ -613,93 +570,59 @@ export class PlayerRuntime {
   private clearStandby(): void {
     this.standbyEpoch += 1;
     this.clearTransition();
-    if (this.standbyBlobUrl) URL.revokeObjectURL(this.standbyBlobUrl);
-    this.standbyRelease?.();
-    this.standbyTrackId = null;
-    this.standbyBlobUrl = null;
-    this.standbyRelease = null;
+    if (this.standbySlot) releaseStandbySource(this.standbySlot.source);
+    this.standbySlot = null;
   }
 
-  // loads the upcoming track on the standby element so it can start without a gap.
-  // ponytail: only cached or local tracks; an uncached stream falls back to the normal load
+  private isStandbyReadyFor(trackId: string): boolean {
+    return (
+      this.standbySlot?.trackId === trackId && this.standby.readyState >= 3
+    );
+  }
+
   private async prepareStandby(track: Track): Promise<void> {
     if (this.finishOutgoing) {
       this.pendingStandby = track;
       return;
     }
-    if (track.id === this.currentTrackId || track.id === this.standbyTrackId)
+    if (
+      track.id === this.currentTrackId ||
+      track.id === this.standbySlot?.trackId
+    )
       return;
     this.clearStandby();
     const epoch = this.standbyEpoch;
-    let url: string | null = null;
-    let owned = false;
-    let release: (() => void) | null = null;
-    try {
-      if (isSavedTrack(track.id)) {
-        const stream = await resolvePlaybackStream(
-          track,
-          new AbortController().signal,
-        );
-        rememberStreamOrigin(track.id, { ...stream, source: "local" });
-        owned = Boolean(stream.blob);
-        url = stream.blob ? URL.createObjectURL(stream.blob) : stream.url;
-        release = stream.release ?? null;
-      } else {
-        const cached = await linerDb.getAudio(track.id);
-        if (
-          cached?.blob?.size &&
-          (!cached.blob.type || cached.blob.type.startsWith("audio/"))
-        ) {
-          url = URL.createObjectURL(cached.blob);
-          owned = true;
-        } else if (isLocalTrackId(track.id)) {
-          const stream = await resolvePlaybackStream(
-            track,
-            new AbortController().signal,
-          );
-          owned = Boolean(stream.blob);
-          url = stream.blob ? URL.createObjectURL(stream.blob) : stream.url;
-          release = stream.release ?? null;
-        }
-      }
-    } catch {
-      // no standby: the track loads the usual way when its turn comes
-    }
-    if (!url) return;
+    const source = await resolveStandbySource(track);
+    if (!source) return;
     if (
       epoch !== this.standbyEpoch ||
       this.finishOutgoing ||
       track.id === this.currentTrackId
     ) {
-      if (owned) URL.revokeObjectURL(url);
-      release?.();
+      releaseStandbySource(source);
       return;
     }
     this.standby.volume = 0;
-    this.standby.src = url;
+    this.standby.src = source.url;
     this.standby.load();
-    this.standbyTrackId = track.id;
-    this.standbyBlobUrl = owned ? url : null;
-    this.standbyRelease = release;
+    this.standbySlot = { trackId: track.id, source };
     log("cyan", "preload", `standby ready: "${track.title}"`);
   }
 
-  // arms a timer that starts the standby track just before the current one ends:
-  // early by the crossfade length, or by GAPLESS_HEAD_START_MS for a gapless join
   private scheduleTransition(): void {
-    if (this.transitionTimer || !this.standbyTrackId || this.audio.paused)
-      return;
+    if (this.transitionTimer || !this.standbySlot || this.audio.paused) return;
     const next = this.peekAutoNext?.();
-    if (!next || next.id !== this.standbyTrackId) return;
+    if (!next || next.id !== this.standbySlot.trackId) return;
     const remainingMs =
       ((this.audio.duration - this.audio.currentTime) * 1000) /
       (this.audio.playbackRate || 1);
     if (!Number.isFinite(remainingMs)) return;
     const { currentTrack, crossfadeSeconds } = usePlayerStore.getState();
-    const fadeMs = transitionMs(currentTrack, next, crossfadeSeconds);
-    const startInMs = remainingMs - (fadeMs || GAPLESS_HEAD_START_MS);
-    // timeupdate only fires every ~250ms, so a precise timer covers the last stretch
-    if (startInMs > 1000) return;
+    const { fadeMs, startInMs } = transitionTiming(
+      remainingMs,
+      transitionMs(currentTrack, next, crossfadeSeconds),
+    );
+    if (startInMs > TRANSITION_ARM_WINDOW_MS) return;
     this.transitionTimer = setTimeout(
       () => {
         this.transitionTimer = null;
@@ -710,10 +633,8 @@ export class PlayerRuntime {
   }
 
   private startTransition(next: Track, fadeMs: number): void {
-    if (this.audio.paused || this.standbyTrackId !== next.id) return;
+    if (this.audio.paused || !this.isStandbyReadyFor(next.id)) return;
     if (this.peekAutoNext?.()?.id !== next.id) return;
-    // not buffered yet: the ended handler loads it the usual way
-    if (this.standby.readyState < 3) return;
     log("cyan", "audio", "near the end — handing off to the next track");
     this.onEnded?.();
     this.handOff(next, fadeMs);
@@ -721,18 +642,16 @@ export class PlayerRuntime {
     usePlayerStore.getState().dispatch({ type: "SKIP_NEXT", isAutoEnd: true });
   }
 
-  // `track` is already loaded on the standby element: start it, fade the current one out
   private handOff(track: Track, fadeMs: number): void {
-    const blob = this.standbyBlobUrl;
-    const release = this.standbyRelease;
-    this.standbyBlobUrl = null;
-    this.standbyRelease = null;
+    const source = this.standbySlot?.source ?? null;
+    this.standbySlot = null;
     this.loadEpoch += 1;
     this.loadAbortController?.abort();
     this.loadAbortController = null;
     this.retireActive(fadeMs || GAPLESS_HEAD_START_MS);
+    const blob = source?.blobUrl ?? null;
     this.activeBlobUrl = blob;
-    this.releaseActiveStream = release;
+    this.releaseActiveStream = source?.release ?? null;
     this.currentTrackId = track.id;
     this.attachedTrackId = track.id;
     this.recoveryAttempts = 0;
@@ -764,8 +683,6 @@ export class PlayerRuntime {
     );
   }
 
-  // the active element fades out on its own and the standby element becomes active
-  // (empty unless the caller hands it a track)
   private retireActive(fadeMs: number): void {
     this.finishOutgoing?.();
     this.clearStandby();
@@ -778,14 +695,9 @@ export class PlayerRuntime {
     this.attachedTrackId = null;
     this.attachedFromLiner = false;
     this.currentSessionExpiresAt = null;
-    // the active element always carries the id other features look up
     this.audio = this.standby;
     this.standby = old;
-    old.id = "liner-audio-standby";
-    this.audio.id = "liner-audio";
-    const win = window as any;
-    win.__liner_audio = this.audio;
-    win.__liner_audio_standby = old;
+    markActiveAudio(this.audio, old);
 
     let stopRamp = () => {};
     const finish = () => {
@@ -794,7 +706,7 @@ export class PlayerRuntime {
       old.pause();
       if (blob) URL.revokeObjectURL(blob);
       release?.();
-      const pending = this.pendingStandby;
+      const pending = this.pendingStandby ?? this.peekAutoNext?.() ?? null;
       this.pendingStandby = null;
       if (pending) void this.prepareStandby(pending);
     };
@@ -907,7 +819,9 @@ export class PlayerRuntime {
   }
 
   public async preloadTrack(track: Track): Promise<void> {
+    const ticket = ++this.preloadTicket;
     await this.cacheAhead(track);
+    if (ticket !== this.preloadTicket) return;
     await this.prepareStandby(track);
   }
 
@@ -1006,7 +920,6 @@ export class PlayerRuntime {
       !bypassCache &&
       startPositionMs === 0
     ) {
-      // a transition already started this track on the standby element
       this.handoffTrackId = null;
       const store = usePlayerStore.getState();
       if (!store.keepSpeedAcrossTracks) store.resetSpeedAndPitch();
@@ -1046,12 +959,10 @@ export class PlayerRuntime {
       store.resetSpeedAndPitch();
     }
 
-    // skipping to the track already waiting on the standby element: start it right away
     if (
       !bypassCache &&
       startPositionMs === 0 &&
-      this.standbyTrackId === track.id &&
-      this.standby.readyState >= 3
+      this.isStandbyReadyFor(track.id)
     ) {
       this.updateMediaSessionMetadata(track);
       this.handOff(track, this.audio.paused ? 0 : SKIP_FADE_MS);
@@ -1065,7 +976,6 @@ export class PlayerRuntime {
     store.setStatus("loading", null);
     store.setPosition(startPositionMs > 0 ? startPositionMs : 0);
 
-    // skipping while playing: the old track fades out on its own element while this one loads
     if (this.audio.paused) this.pauseForTransition();
     else this.retireActive(SKIP_FADE_MS);
 

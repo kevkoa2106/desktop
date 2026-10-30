@@ -564,8 +564,8 @@ export class PitchShifterController {
 
       if (!isCompleteGraph(graph)) {
         if (graph) disposeStaleGraph(graph);
-        // one shared input bus: during a crossfade both audio elements feed the same effects
-        graph = buildGraph(ctx, ctx.createGain());
+        const sharedInputBus = ctx.createGain();
+        graph = buildGraph(ctx, sharedInputBus);
         win.__liner_pitch_graph = graph;
       }
 

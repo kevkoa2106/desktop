@@ -11,7 +11,7 @@ import {
   normalizeEqGains,
   type EqCustomPreset,
 } from "../engine/equalizer";
-import { MAX_CROSSFADE_SECONDS } from "../engine/crossfade";
+import { clampCrossfadeSeconds } from "../engine/crossfade";
 
 export { debouncedStorage };
 
@@ -71,7 +71,6 @@ export interface SessionState {
   pitchSemitones: number;
   isPitchLinked: boolean;
   keepSpeedAcrossTracks: boolean;
-  // seconds the next track overlaps the current one, 0 = gapless only
   crossfadeSeconds: number;
   isReverbEnabled: boolean;
   reverbLevel: number;
@@ -259,12 +258,7 @@ export const usePlayerStore = create<PlayerStore>()(
       setKeepSpeedAcrossTracks: (keepSpeedAcrossTracks: boolean) =>
         set({ keepSpeedAcrossTracks }),
       setCrossfadeSeconds: (seconds: number) =>
-        set({
-          crossfadeSeconds: Math.max(
-            0,
-            Math.min(MAX_CROSSFADE_SECONDS, Math.round(seconds)),
-          ),
-        }),
+        set({ crossfadeSeconds: clampCrossfadeSeconds(seconds) }),
       setIsReverbEnabled: (isReverbEnabled: boolean) =>
         set({ isReverbEnabled }),
       setReverbLevel: (reverbLevel: number) =>
@@ -368,12 +362,9 @@ export const usePlayerStore = create<PlayerStore>()(
           if (typeof state.keepSpeedAcrossTracks !== "boolean") {
             state.keepSpeedAcrossTracks = true;
           }
-          if (
-            typeof state.crossfadeSeconds !== "number" ||
-            isNaN(state.crossfadeSeconds)
-          ) {
-            state.crossfadeSeconds = 0;
-          }
+          state.crossfadeSeconds = clampCrossfadeSeconds(
+            state.crossfadeSeconds,
+          );
           if (typeof state.isReverbEnabled !== "boolean") {
             state.isReverbEnabled = false;
           }
