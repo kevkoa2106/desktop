@@ -6,6 +6,7 @@ import { PlayerRuntime } from "./playerRuntime";
 import { resolvePlaybackStream } from "./streamResolver";
 import { usePlayerStore } from "../store/playerStore";
 import { linerDb } from "@/shared/storage";
+import { setSavedTrackIndex } from "@/shared/media/saved";
 import type { Track } from "@/shared/types";
 
 const track = (id: string): Track => ({
@@ -81,6 +82,7 @@ describe("PlayerRuntime — gapless and crossfade transitions", () => {
   });
 
   afterEach(() => {
+    setSavedTrackIndex([]);
     vi.useRealTimers();
     vi.restoreAllMocks();
     dispatch.mockReset();
@@ -114,6 +116,43 @@ describe("PlayerRuntime — gapless and crossfade transitions", () => {
 
     await vi.advanceTimersByTimeAsync(100);
     expect(outgoing.paused).toBe(true);
+  });
+
+  it("prepares saved audio through its resolver instead of the legacy cache", async () => {
+    setSavedTrackIndex([
+      {
+        trackId: next.id,
+        key: "saved-next",
+        title: next.title,
+        artists: next.artists,
+        durationMs: next.durationMs,
+        audioFile: "next.webm",
+        mimeType: "audio/webm",
+        byteSize: 1,
+        savedAt: 0,
+      },
+    ]);
+    vi.mocked(resolvePlaybackStream).mockResolvedValue({
+      url: "liner-local://saved-audio/saved-next",
+      expiresAtMs: null,
+      mimeType: "audio/webm",
+      codec: "local",
+      bitrate: 0,
+    });
+
+    const rt = await playingWithNextOnStandby(0.1);
+    expect(linerDb.getAudio).not.toHaveBeenCalled();
+    expect(rt.standby.src).toBe("liner-local://saved-audio/saved-next");
+    const incoming = rt.standby;
+
+    rt.audio.dispatchEvent(new Event("timeupdate"));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(rt.audio).toBe(incoming);
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "SKIP_NEXT",
+      isAutoEnd: true,
+    });
+    expect(resolvePlaybackStream).toHaveBeenCalledTimes(1);
   });
 
   it("with crossfade on, overlaps the tracks for the crossfade length", async () => {

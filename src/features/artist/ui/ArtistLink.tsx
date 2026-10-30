@@ -7,6 +7,7 @@ import {
 } from "react";
 import { useStableNavigate } from "@/shared/hooks/useStableNavigate";
 import type { TrackArtist } from "@/shared/types";
+import { useOfflineModeStore } from "@/features/connectivity/store/offlineModeStore";
 
 export interface ArtistLinkProps {
   name?: string;
@@ -30,6 +31,7 @@ export default function ArtistLink({
   plain = false,
 }: ArtistLinkProps) {
   const navigate = useStableNavigate();
+  const offline = useOfflineModeStore((state) => state.offline);
   const outerRef = useRef<HTMLSpanElement>(null);
   const innerRef = useRef<HTMLSpanElement>(null);
   const [delta, setDelta] = useState(0);
@@ -54,8 +56,11 @@ export default function ArtistLink({
 
   let innerContent: React.ReactNode = null;
 
-  if (plain) {
-    const text = name ?? artists;
+  if (plain || offline) {
+    const text =
+      name ??
+      artists ??
+      artistList?.map((artist) => artist.name).join(separator);
     if (!text) return null;
     innerContent = <span>{text}</span>;
   } else if (artistList && artistList.length > 0) {

@@ -25,12 +25,14 @@ import { isLocalTrackId } from "@/shared/media/local";
 import { showToast } from "@/shared/ui/Toast";
 import { createTranslatorSync, getStoredLocale } from "@/languages";
 import {
+  connectionToastsMuted,
   isConnectivityFailure,
   isPlaybackPath,
   recordConnectivityFailure,
   statusOf,
   stripQuery,
 } from "@/features/connectivity";
+import { enterOfflineMode } from "@/features/connectivity/engine/offlineController";
 
 function translate(key: string, vars?: Record<string, string | number>) {
   try {
@@ -40,6 +42,20 @@ function translate(key: string, vars?: Record<string, string | number>) {
   }
 }
 
+function offlineModeAction() {
+  return {
+    label: translate("offline.use_offline"),
+    onClick: () =>
+      enterOfflineMode(
+        "auto",
+        true,
+        typeof navigator !== "undefined" && !navigator.onLine
+          ? "offline"
+          : "server",
+      ),
+  };
+}
+
 import { getApiBaseUrl } from "./baseUrl";
 
 const CLIENT_VERSION =
@@ -47,6 +63,7 @@ const CLIENT_VERSION =
   "1.0.4-desktop";
 
 const DEFAULT_TIMEOUT_MS = 15000;
+const LYRICS_CONNECT_TIMEOUT_MS = 12000;
 
 async function fetchWithTimeout(
   url: string,
@@ -84,10 +101,12 @@ async function fetchWithTimeout(
     return res;
   } catch (err: any) {
     if (didTimeout) {
-      showToast(translate("common.error_timeout_title"), "error", {
-        id: "network-timeout-toast",
-        description: translate("common.error_network"),
-      });
+      if (!connectionToastsMuted())
+        showToast(translate("common.error_timeout_title"), "error", {
+          id: "network-timeout-toast",
+          description: translate("common.error_network"),
+          action: offlineModeAction(),
+        });
       throw new ApiError(
         0,
         "Request timed out. Please check your network connection.",
@@ -97,10 +116,12 @@ async function fetchWithTimeout(
     if (userSignal?.aborted) {
       throw err;
     }
-    showToast(translate("common.error_network_title"), "error", {
-      id: "network-error-toast",
-      description: translate("common.error_network"),
-    });
+    if (!connectionToastsMuted())
+      showToast(translate("common.error_network_title"), "error", {
+        id: "network-error-toast",
+        description: translate("common.error_network"),
+        action: offlineModeAction(),
+      });
     throw new ApiError(
       0,
       "Network error. Unable to reach server.",
@@ -203,6 +224,12 @@ async function executeRequest<T>(
     if (expiryMs && expiryMs > Date.now()) {
       accessToken = currentSession.accessToken;
     } else {
+      recordConnectivityFailure({
+        method,
+        path: stripQuery(path),
+        status: 0,
+        latencyMs: Math.round(performance.now() - startTime),
+      });
       throw new ApiError(
         0,
         "Network error during token refresh.",
@@ -373,7 +400,7 @@ async function executeRequest<T>(
           ? body.requestId
           : undefined);
 
-    if (res.status >= 500) {
+    if (res.status >= 500 && !connectionToastsMuted()) {
       showToast(translate("common.error_server_title"), "error", {
         id: `server-error-${res.status}`,
         description: translate("common.error_server"),
@@ -1049,7 +1076,13 @@ export const api = {
         { signal },
       );
     } catch (err) {
-      if (err instanceof ApiError && err.status === 404) return null;
+      if (
+        err instanceof ApiError &&
+        err.status === 404 &&
+        err.code === "LYRICS_NOT_FOUND"
+      ) {
+        return null;
+      }
       throw err;
     }
   },
@@ -1085,9 +1118,16 @@ export const api = {
     };
 
     let res: Response;
+    const connect = new AbortController();
+    const connectTimer = setTimeout(
+      () => connect.abort(),
+      LYRICS_CONNECT_TIMEOUT_MS,
+    );
     try {
       res = await fetch(`${getApiBaseUrl()}${path}`, {
-        signal,
+        signal: signal
+          ? AbortSignal.any([signal, connect.signal])
+          : connect.signal,
         headers: {
           ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
           ...correlationHeaders,
@@ -1095,10 +1135,12 @@ export const api = {
         },
       });
     } catch (fetchErr: any) {
-      if (signal?.aborted || fetchErr?.name === "AbortError") {
-        throw fetchErr;
-      }
+      if (signal?.aborted) throw fetchErr;
+      if (connect.signal.aborted)
+        throw new ApiError(0, "Lyrics request timed out.", "TIMEOUT_ERROR");
       throw fetchErr;
+    } finally {
+      clearTimeout(connectTimer);
     }
 
     const lyricsDateHeader = res.headers?.get?.("date");

@@ -3,13 +3,17 @@ import { useNavigate } from "react-router-dom";
 import { shouldReleaseTopPin, startsPinnedToTop } from "./lyricsTopPin";
 import { usePlayerStore } from "../store/playerStore";
 import {
+  useGlassBlur,
   useKawarpEnabled,
   useLyricsEdgeBlur,
   useLyricsEdgeFade,
 } from "../store/visualModeStore";
 import { useScrollEdges } from "../hooks/useScrollEdges";
 import { cn } from "@/shared/lib";
-import { ISLAND_SURFACE } from "@/shared/ui";
+import { Notch } from "@/shared/ui";
+import { FullscreenTopNotch } from "./FullscreenTopNotch";
+import { LyricsNotchStatus } from "./LyricsNotchStatus";
+import { FullscreenFrameGlass } from "./FullscreenFrameGlass";
 import { playerEngine } from "../engine/playerEngine";
 import {
   useLyricsStore,
@@ -422,6 +426,7 @@ export function FullscreenPlayer({
   }, []);
 
   const kawarpEnabled = useKawarpEnabled();
+  const glassBlur = useGlassBlur();
   const [kawarpShown, setKawarpShown] = useState(false);
   const [kawarpWasEnabled, setKawarpWasEnabled] = useState(kawarpEnabled);
   if (kawarpWasEnabled !== kawarpEnabled) {
@@ -449,6 +454,8 @@ export function FullscreenPlayer({
     !hasLyrics &&
     !lyricsError &&
     plainLyrics === "[INSTRUMENTAL]";
+  const isLyricsLoading = !hasLyrics && lyricsLoading;
+  const isLyricsMissing = isMatchingTrack && !hasLyrics && !lyricsLoading;
 
   return (
     <div
@@ -486,19 +493,22 @@ export function FullscreenPlayer({
 
       <div className="absolute inset-0 z-[1] bg-black/40" />
 
-      <div className="absolute inset-0 z-10 flex">
+      <FullscreenFrameGlass />
+
+      <div className="absolute inset-1.5 z-10 flex">
         <div className="flex-1 flex flex-col items-center justify-center gap-5">
-          <PlayerUiElements onClose={onClose} />
+          <PlayerUiElements
+            onClose={onClose}
+            layout={isLyricsMissing ? "horizontal" : "vertical"}
+          />
         </div>
 
-        <div className="flex-1 h-full min-h-0 pl-2 pr-6 flex flex-col relative">
-          <div className="absolute top-[6px] left-1/2 -translate-x-1/2 z-30 pointer-events-none flex justify-center">
-            <div className="relative inline-flex">
-              <BetaVisualsWarning docked={showProviderIsland} />
-              {showProviderIsland && <LyricsProviderIsland />}
-            </div>
-          </div>
-
+        <div
+          className={cn(
+            "h-full min-h-0 flex flex-col relative overflow-hidden",
+            isLyricsMissing ? "grow-0 basis-0 px-0" : "grow basis-0 pl-2 pr-6",
+          )}
+        >
           <div
             className="flex-1 min-h-0 relative w-full h-full"
             style={{
@@ -520,92 +530,35 @@ export function FullscreenPlayer({
               )}
             </AnimatePresence>
           </div>
-
-          <AnimatePresence mode="wait">
-            {!hasLyrics && lyricsLoading ? (
-              <motion.div
-                key="skeleton"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.15 }}
-                className="absolute inset-0 flex flex-col items-center justify-center"
-              >
-                <div className="flex flex-col gap-5 w-full max-w-[500px]">
-                  {[80, 65, 45, 70, 55, 85, 60, 50, 75, 40, 65, 55].map(
-                    (w, i) => (
-                      <div
-                        key={i}
-                        className="h-5 rounded animate-pulse bg-border-alpha-14"
-                        style={{ width: `${w}%` }}
-                      />
-                    ),
-                  )}
-                </div>
-              </motion.div>
-            ) : !hasLyrics && isInstrumental ? (
-              <motion.div
-                key="instrumental"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.15 }}
-                className="absolute inset-0 flex items-center justify-center text-text-tertiary text-lg"
-              >
-                <span>{t("player.instrumental")}</span>
-              </motion.div>
-            ) : !hasLyrics ? (
-              <motion.div
-                key="empty"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.15 }}
-                className="absolute inset-0 flex items-center justify-center text-text-tertiary"
-              >
-                <div className="flex flex-col items-center justify-center gap-3 opacity-80">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="48"
-                    height="48"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="opacity-40"
-                  >
-                    <path d="M9 18V5l12-2v13"></path>
-                    <circle cx="6" cy="18" r="3"></circle>
-                    <circle cx="18" cy="16" r="3"></circle>
-                    <line x1="2" y1="2" x2="22" y2="22"></line>
-                  </svg>
-                  <span
-                    className="text-[15px] font-[400] max-w-[250px] text-center"
-                    style={{ lineHeight: "1.4" }}
-                  >
-                    {lyricsError || t("player.no_lyrics_found")}
-                  </span>
-                </div>
-              </motion.div>
-            ) : null}
-          </AnimatePresence>
         </div>
       </div>
 
-      <button
-        type="button"
-        aria-label={t("player.close_fullscreen")}
-        onClick={onClose}
-        data-no-window-drag
-        className={cn(
-          ISLAND_SURFACE,
-          "absolute top-[6px] left-[6px] z-30 inline-flex h-[32px] w-[32px] items-center justify-center border-none text-white/80 hover:text-white hover:bg-white/10 active:scale-[0.94] transition-all cursor-pointer select-none pointer-events-auto",
-        )}
-      >
-        <DownLine size={18} />
-      </button>
+      <div className="absolute top-1.5 left-1/2 z-30 flex -translate-x-1/2 justify-center pointer-events-none">
+        <FullscreenTopNotch>
+          <BetaVisualsWarning docked={false} />
+          {showProviderIsland && <LyricsProviderIsland />}
+          {isLyricsLoading && <LyricsNotchStatus kind="loading" />}
+          {isLyricsMissing && (
+            <LyricsNotchStatus
+              kind={isInstrumental ? "instrumental" : "missing"}
+            />
+          )}
+        </FullscreenTopNotch>
+      </div>
+
+      <div className="absolute top-1.5 left-1.5 z-30">
+        <Notch align="start" tone="glass" blur={glassBlur}>
+          <button
+            type="button"
+            aria-label={t("player.close_fullscreen")}
+            onClick={onClose}
+            data-no-window-drag
+            className="inline-flex h-[26px] w-[26px] cursor-pointer items-center justify-center rounded-md border-none bg-transparent text-white/70 transition-colors select-none hover:bg-white/10 hover:text-white active:scale-95"
+          >
+            <DownLine size={16} />
+          </button>
+        </Notch>
+      </div>
     </div>
   );
 }

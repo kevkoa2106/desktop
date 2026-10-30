@@ -329,13 +329,11 @@ export function OverlayPlayer() {
                 text={state.track?.title || "No track playing"}
                 isParentHovered={isInfoHovered}
                 className="text-[13px] font-normal leading-[16px] text-white tracking-tight"
-                style={{ fontFamily: "var(--font-inter), sans-serif" }}
               />
               <ScrollableText
                 text={state.track?.artist || ""}
                 isParentHovered={isInfoHovered}
                 className="mt-[1px] text-[11px] font-light leading-[14px] text-white/50"
-                style={{ fontFamily: "var(--font-inter), sans-serif" }}
               />
             </div>
           </div>

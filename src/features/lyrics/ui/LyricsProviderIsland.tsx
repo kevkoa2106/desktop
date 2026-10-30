@@ -13,7 +13,6 @@ import {
 import { useLyricsStore } from "../store/lyricsStore";
 import { useTranslation } from "@/languages";
 import { cn } from "@/shared/lib";
-import { ISLAND_SURFACE } from "@/shared/ui";
 
 function formatOffsetBadge(ms: number): string {
   if (ms === 0) return "0.0s";
@@ -143,8 +142,7 @@ export function LyricsProviderIsland() {
     >
       <div
         className={cn(
-          ISLAND_SURFACE,
-          "inline-flex items-center h-[32px] min-h-[32px] max-h-[32px] box-border px-[3px] gap-[2px] text-white",
+          "inline-flex items-center h-[26px] min-h-[26px] max-h-[26px] box-border gap-[2px] text-white",
         )}
       >
         {hasMultiple && (
@@ -169,7 +167,6 @@ export function LyricsProviderIsland() {
           className={`flex items-center gap-[6px] h-[26px] min-h-[26px] max-h-[26px] px-[8px] rounded-md text-[12px] font-[500] text-white transition-all border-none bg-transparent ${
             hasMultiple ? "hover:bg-white/10 cursor-pointer" : "cursor-default"
           }`}
-          style={{ fontFamily: "var(--font-inter), sans-serif" }}
         >
           <span className="truncate max-w-[120px]">
             {currentProvider.provider}
@@ -228,7 +225,6 @@ export function LyricsProviderIsland() {
                   ? "text-white font-[600]"
                   : "text-white/80 font-[500]"
               }`}
-              style={{ fontFamily: "var(--font-inter), sans-serif" }}
               title={t("player.lyrics_offset")}
             >
               <TimeLine
@@ -278,7 +274,6 @@ export function LyricsProviderIsland() {
                       ? "bg-white/15 text-white font-[500]"
                       : "bg-transparent text-white/70 hover:bg-white/10 hover:text-white font-[400]"
                   }`}
-                  style={{ fontFamily: "var(--font-inter), sans-serif" }}
                 >
                   <span className="truncate">{option.provider}</span>
                   {isActive ? (
@@ -305,10 +300,7 @@ export function LyricsProviderIsland() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-[6px]">
                 <TimeLine size={14} className="text-white" />
-                <span
-                  className="text-[12px] font-[600] text-white"
-                  style={{ fontFamily: "var(--font-inter), sans-serif" }}
-                >
+                <span className="text-[12px] font-[600] text-white">
                   {t("player.lyrics_offset")}
                 </span>
               </div>
@@ -317,7 +309,6 @@ export function LyricsProviderIsland() {
                   type="button"
                   onClick={resetOffset}
                   className="inline-flex items-center gap-[4px] px-[6px] py-[2px] rounded-md text-[11px] font-[500] text-white/70 hover:text-white hover:bg-white/10 border-none bg-transparent cursor-pointer transition-colors"
-                  style={{ fontFamily: "var(--font-inter), sans-serif" }}
                 >
                   <Refresh1Line size={11} />
                   <span>{t("player.reset")}</span>
